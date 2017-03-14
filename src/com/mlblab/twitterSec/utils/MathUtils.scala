@@ -1,7 +1,6 @@
 package com.mlblab.twitterSec.utils
 
 import java.util.ArrayList
-
 import org.apache.spark.mllib.linalg.Matrices
 import org.apache.spark.mllib.linalg.Matrix
 import org.apache.spark.mllib.linalg.SingularValueDecomposition
@@ -11,6 +10,7 @@ import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import scala.collection.JavaConversions._
+import org.apache.spark.mllib.linalg.DenseVector
 
 object MathUtils {
   def transposeRowMatrix(m: RowMatrix): RowMatrix = {
@@ -72,11 +72,27 @@ object MathUtils {
     res
   }
   
-  def dropColsFromVector(vector: SparseVector, colsToDrop: Array[Int]) : Vector = {    
-    val (toKeepSparse,toKeepThis) = vector.indices.toList.zipWithIndex.filter{ case (sparseIndex,thisIndex) => !colsToDrop.contains(sparseIndex) }.unzip
-    val toKeepAdjusted = toKeepSparse.map(x => x - colsToDrop.filter(_ < x).size)
-    val valuesToKeep = vector.values.toList.zipWithIndex.filter{ case (value,thisIndex) => toKeepThis.contains(thisIndex) }.map(_._1)
-    assert(toKeepSparse.length == valuesToKeep.length) // could fail if 0's aren't in values to keep ??
-    Vectors.sparse(vector.size - colsToDrop.size,toKeepAdjusted.zip(valuesToKeep))
+  def toBreeze(vector: Vector) : breeze.linalg.Vector[scala.Double] = vector match {
+      case sv: SparseVector => new breeze.linalg.SparseVector[Double](sv.indices, sv.values, sv.size)
+      case dv: DenseVector => new breeze.linalg.DenseVector[Double](dv.values)
+  }
+  
+  def fromBreeze(breezeVector: breeze.linalg.Vector[Double]): Vector = {
+    breezeVector match {
+      case v: breeze.linalg.DenseVector[Double] =>
+        if (v.offset == 0 && v.stride == 1 && v.length == v.data.length) {
+          new DenseVector(v.data)
+        } else {
+          new DenseVector(v.toArray)  // Can't use underlying array directly, so make a new one
+        }
+      case v: breeze.linalg.SparseVector[Double] =>
+        if (v.index.length == v.used) {
+          new SparseVector(v.length, v.index, v.data)
+        } else {
+          new SparseVector(v.length, v.index.slice(0, v.used), v.data.slice(0, v.used))
+        }
+      case v: breeze.linalg.Vector[_] =>
+        sys.error("Unsupported Breeze vector type: " + v.getClass.getName)
+    }
   }
 }

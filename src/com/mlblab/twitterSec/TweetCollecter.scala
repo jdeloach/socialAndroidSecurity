@@ -5,17 +5,21 @@ import java.io.FileOutputStream
 import java.io.PrintWriter
 import java.text.SimpleDateFormat
 import java.util.Date
+
 import scala.collection.mutable.HashMap
 import scala.reflect.io.Directory
+
 import org.apache.spark.SparkConf
 import org.apache.spark.SparkContext
 import org.apache.spark.streaming.Seconds
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.twitter.TwitterUtils
+
 import com.google.gson.Gson
+import com.mlblab.twitterSec.utils.ConfigValues
+
 import twitter4j.auth.OAuthAuthorization
 import twitter4j.conf.ConfigurationBuilder
-import com.mlblab.twitterSec.utils.ConfigValues
 
 /**
  * Collect at least the specified number of tweets into json text files.
