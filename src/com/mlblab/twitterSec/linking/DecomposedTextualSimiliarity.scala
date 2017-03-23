@@ -25,6 +25,7 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.functions.udf
 import com.mlblab.twitterSec.utils.MathUtils
 import org.apache.spark.mllib.linalg.Vectors
+import org.apache.spark.broadcast.Broadcast
 
 object DecomposedTextualSimiliarity {
   val path = "linkingTextEn.obj"
@@ -35,35 +36,41 @@ object DecomposedTextualSimiliarity {
   
   var data: RDD[(String,(String,String))] = _
   var apks: RDD[String] = _
-  var termsMatrix: RowMatrix = _
+  var termsMatrix: IndexedRowMatrix = _
   var docVectors: RDD[(String,Vector)] = _
+  var docVectorsIndex: Broadcast[scala.collection.Map[String,Int]] = _
+  var docIndexMap: Broadcast[scala.collection.Map[Int,String]] = _
+  var docVectors2: IndexedRowMatrix = _
   
   def main(args: Array[String]) = {
     setup()
     
     if(sc.isLocal)
-      data = sc.parallelize(sc.objectFile[(String,(String,String))](path).take(500)).repartition(40) // apk -> (tweets,appstore)
+      data = sc.parallelize(sc.objectFile[(String,(String,String))](path).take(200)).repartition(40) // apk -> (tweets,appstore)
     else
-      data = sc.objectFile[(String,(String,String))](path).sample(false, .5).repartition(480) // apk -> (tweets,appstore)
+      data = sc.objectFile[(String,(String,String))](path).sample(false, .3).repartition(480) // apk -> (tweets,appstore)
 
     docVectors = createTerms(data.flatMap(x => Seq(x._1 + "_t" -> x._2._1, x._1 + "_m" -> x._2._2)))
+    docVectorsIndex = sc.broadcast(docVectors.zipWithIndex.map(x => x._1._1 -> x._2.toInt).collectAsMap) // apk_{t,m} -> column
+    docIndexMap = sc.broadcast(docVectors.zipWithIndex.map(x => x._2.toInt -> x._1._1).collectAsMap) // column -> apk_{t,m}
+    docVectors2 = new IndexedRowMatrix(docVectors.zipWithIndex.map(x => new IndexedRow(x._2,x._1._2)))
+    //docVectors2 = new IndexedRowMatrix(docVectors.map(x => new IndexedRow(docVectorsIndex(x._1),x._2)))
+    termsMatrix = MathUtils.transposeIndexedRowMatrix(docVectors2)
+    
     log.warn(s"terms.size: ${docVectors.first._2.size}")
     
-    termsMatrix = MathUtils.transposeRowMatrix(new RowMatrix(docVectors.map(_._2)))
     apks = data.map(_._1)
-    val ct = apks.count.toInt
+    val ct = Math.min(docVectors.first._2.size, apks.count.toInt)
     List(0, .25*ct, .5*ct, .75*ct, ct).foreach { components => iterate(components.toInt) }
   }
   
   def iterate(components: Int) = {
     // create matrice of column is the key, row is the vocab
-    val docVectorsIndex = docVectors.zipWithIndex.map(x => x._1._1 -> x._2.toInt).collectAsMap // apk_{t,m} -> column
-    val docIndexMap = docVectors.zipWithIndex.map(x => x._2.toInt -> x._1._1).collectAsMap // column -> apk_{t,m}
-    var docVectorsReduced = new IndexedRowMatrix(docVectors.map(x => new IndexedRow(docVectorsIndex(x._1),x._2)))
+    var docVectorsReduced = docVectors2
     
     if(components != 0) {
       // create reduced space
-      val reducedSpace = jointReducedSpace(components)
+      val reducedSpace = jointReducedSpaceSVD(components)
       val reducedSpaceLocal = new DenseMatrix(reducedSpace.rows.count.toInt, reducedSpace.rows.first.size, reducedSpace.rows.flatMap(_.toArray).collect)
       log.warn(s"dims of reducedSpace: ${reducedSpace.numRows}x${reducedSpace.numCols}, components: $components")
       log.warn(s"dims of reducedSpaceLocal: ${reducedSpaceLocal.numRows}x${reducedSpaceLocal.numCols}, components: $components")
@@ -77,36 +84,44 @@ object DecomposedTextualSimiliarity {
     val accum = sc.accumulator(0)
     
     val ranks = cosineSimilarityMatrix.toIndexedRowMatrix().rows
-      .filter(row => docIndexMap(row.index.toInt).endsWith("_t"))
+      .filter(row => docIndexMap.value(row.index.toInt).endsWith("_t"))
       .map { twitterRow => {
-        val keyName = docIndexMap(twitterRow.index.toInt)
+        val keyName = docIndexMap.value(twitterRow.index.toInt)
         val apk = keyName.substring(0, keyName.lastIndexOf('_'))
-        val mCol = docVectorsIndex(apk + "_m")
-        val rowRanked = twitterRow.vector.toArray.toList.sorted.reverse
+        val mCol = docVectorsIndex.value(apk + "_m")
+        val metaRowRanked = twitterRow.vector.toArray.toList
+                            .zipWithIndex.filter{ case (value,idx) => docIndexMap.value(idx).endsWith("_m") } // only rank against other metadata, don't count tweets in ranking
+                            .map(_._1).sorted.reverse
+        //val rowRanked = twitterRow.vector.toArray.toList.sorted.reverse
         val metaVal = twitterRow.vector.toArray(mCol)
         
-        rowRanked.indexOf(metaVal)
+        metaRowRanked.indexOf(metaVal)
       }}.collect
     
     val total = apks.count - accum.value
 
+    val perfect = ranks.count(x => x == 0)
     val correctAtLevels = List(.01, .03, .05, .1, .15, .2, .3).map { threshold => threshold -> ranks.filter(x => x <= threshold*total).size }
     
     log.warn(s"dims of docVectorsReduced: ${docVectorsReduced.numRows}x${docVectorsReduced.numCols}, components: $components")
     log.warn(s"dims of similarity matrix: ${cosineSimilarityMatrix.numRows}x${cosineSimilarityMatrix.numCols}, components: $components")
     
-    log.warn(s"total missing: ${accum.value}, components: $components")
+    log.warn(s"for a perfect match, $perfect were recalled, making acc_0: ${perfect/total.toDouble}, components: $components")
     correctAtLevels.foreach{ case (threshold,correct) => log.warn(s"at threshold: $threshold, $correct were recalled, making acc_$threshold: ${correct/total.toDouble}, components: $components") }
   }
   
-  def jointReducedSpace(components: Int) : RowMatrix = {
+  def jointReducedSpaceSVD(components: Int) : RowMatrix = {
     val svd = termsMatrix.computeSVD(components, computeU = true)
     val sMat = DenseMatrix.diag(svd.s)
     
     log.warn(s"dims of U: ${svd.U.numRows}x${svd.U.numCols}")
     log.warn(s"dims of sMat: ${sMat.numRows}x${sMat.numCols}")
     
-    svd.U.multiply(sMat)
+    svd.U.toRowMatrix.multiply(sMat)
+  }
+  
+  def jointReducedSpacePCA(components: Int) : Matrix = {
+    termsMatrix.toRowMatrix.computePrincipalComponents(components)
   }
   
   def createTerms(texts: RDD[(String,String)]) : RDD[(String,Vector)] = {
@@ -153,7 +168,7 @@ object DecomposedTextualSimiliarity {
   def binarizeVector(v: Vector) = Vectors.sparse(v.size, v.toSparse.indices, Array.fill(v.toSparse.indices.size)(1))
   
   def setup() = {
-    var conf = if(System.getProperty("os.name").contains("OS X")) new SparkConf().setAppName(this.getClass.getSimpleName + "4gb").setMaster("local[2]") else new SparkConf().setAppName(this.getClass.getSimpleName + "4g-lite") 
+    var conf = if(System.getProperty("os.name").contains("OS X")) new SparkConf().setAppName(this.getClass.getSimpleName + "4gb").setMaster("local[10]") else new SparkConf().setAppName(this.getClass.getSimpleName + "4g-lite") 
     conf.set("spark.driver.maxResultSize", "4g")
     sc = new SparkContext(conf)
     sql = new SQLContext(sc)

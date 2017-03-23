@@ -11,6 +11,7 @@ import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import scala.collection.JavaConversions._
 import org.apache.spark.mllib.linalg.DenseVector
+import org.apache.spark.mllib.linalg.distributed.IndexedRow
 
 object MathUtils {
   def transposeRowMatrix(m: RowMatrix): RowMatrix = {
@@ -22,6 +23,22 @@ object MathUtils {
     new RowMatrix(transposedRowsRDD)
   }
 
+  def transposeIndexedRowMatrix(m: IndexedRowMatrix): IndexedRowMatrix = {
+    val transposedRowsRDD = m.rows.map{row => rowToTransposedTriplet(row.vector, row.index)}
+      .flatMap(x => x) // now we have triplets (newRowIndex, (newColIndex, value))
+      .groupByKey
+      .sortByKey() // sort rows and remove row indexes
+      .map(x => buildIndexedRow(x._1,x._2)) // restore order of elements in each row and remove column indexes
+    new IndexedRowMatrix(transposedRowsRDD)
+  }
+  
+  def buildIndexedRow(index: Long, rowWithIndexes: Iterable[(Long, Double)]): IndexedRow = {
+    val resArr = new Array[Double](rowWithIndexes.size)
+    rowWithIndexes.foreach{case (index, value) =>
+        resArr(index.toInt) = value
+    }
+    IndexedRow(index, Vectors.dense(resArr))
+  }
 
   def rowToTransposedTriplet(row: Vector, rowIndex: Long): Array[(Long, (Long, Double))] = {
     val indexedRow = row.toArray.zipWithIndex
