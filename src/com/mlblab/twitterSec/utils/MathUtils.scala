@@ -11,6 +11,13 @@ import org.apache.spark.mllib.linalg.distributed.IndexedRowMatrix
 import org.apache.spark.mllib.linalg.distributed.RowMatrix
 import scala.collection.JavaConversions._
 import org.apache.spark.mllib.linalg.DenseVector
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.types.StructField
+import org.apache.spark.sql.types.ArrayType
+import org.apache.spark.sql.types.StringType
+import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
+import org.apache.spark.rdd.RDD
 
 object MathUtils {
   def transposeRowMatrix(m: RowMatrix): RowMatrix = {
@@ -72,6 +79,20 @@ object MathUtils {
     res
   }
   
+  // Borrowed, with modification, from: https://gist.github.com/softprops/3936429
+  def mean(xs: Traversable[Double]): Double = xs match {
+    case Nil => 0.0
+    case ys => ys.reduceLeft(_ + _) / ys.size.toDouble
+  }
+  
+  // Borrowed, with modification, from: https://gist.github.com/softprops/3936429
+  def stddev(xs: Traversable[Double], avg: Double): Double = xs match {
+    case Nil => 0.0
+    case ys => math.sqrt((0.0 /: ys) {
+     (a,e) => a + math.pow(e - avg, 2.0)
+    } / xs.size)
+  }
+  
   def toBreeze(vector: Vector) : breeze.linalg.Vector[scala.Double] = vector match {
       case sv: SparseVector => new breeze.linalg.SparseVector[Double](sv.indices, sv.values, sv.size)
       case dv: DenseVector => new breeze.linalg.DenseVector[Double](dv.values)
@@ -95,4 +116,33 @@ object MathUtils {
         sys.error("Unsupported Breeze vector type: " + v.getClass.getName)
     }
   }
+  
+  /**
+   * Borrowed with appreciation from: http://stackoverflow.com/a/33195510
+   */
+  def setNullableStateOfArrayColumn(df: DataFrame, cn: String, nullable: Boolean) : DataFrame = {
+    val schema = df.schema
+    val newSchema = StructType(schema.map {
+      case StructField(c, t, n, m) if c.equals(cn) => StructField(c, ArrayType(StringType, nullable), n, m)
+      case y: StructField => y
+    })
+    df.sqlContext.createDataFrame(df.rdd, newSchema)
+  }
+  
+  /**
+   * If Index = 0, that means the right document was selected, e.g. a correct label/a match.
+   * Rank Confidence is, in it's raw form, the cosine similarity between the tweet text and metadata text. 
+   * We scale this on a 0-1 range as the "score," as higher is more confident in the label.
+   */
+  def rankedMetrics(ranks: RDD[(Int,Double)]) : BinaryClassificationMetrics = {
+    // ranks[(Index, 0=correct,Confidence)]
+    val confMax = ranks.map(_._2).max
+    val adjusted = ranks.map { case (rank,conf) => val label = rank match { case 0 => 1d case _ => 0d }; val score = conf * (1 / confMax); (score,label) }
+    new BinaryClassificationMetrics(adjusted)
+  }
+}
+
+object FeatureReductionMethod extends Enumeration {
+  type FeatureReductionMethod = Value
+  val SVD, PCA = Value
 }
