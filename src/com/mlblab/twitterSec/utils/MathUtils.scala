@@ -145,18 +145,6 @@ object MathUtils {
     })
     df.sqlContext.createDataFrame(df.rdd, newSchema)
   }
-
-  /**
-   * If Index = 0, that means the right document was selected, e.g. a correct label/a match.
-   * Rank Confidence is, in it's raw form, the cosine similarity between the tweet text and metadata text.
-   * We scale this on a 0-1 range as the "score," as higher is more confident in the label.
-   */
-  def rankedMetrics(ranks: RDD[(Int,Double)]) : BinaryClassificationMetrics = {
-    // ranks[(Index, 0=correct,Confidence)]
-    val confMax = ranks.map(_._2).max
-    val adjusted = ranks.map { case (rank,conf) => val label = rank match { case 0 => 1d case _ => 0d }; val score = conf * (1 / confMax); (score,label) }
-    new BinaryClassificationMetrics(adjusted)
-  }
 }
 
 object FeatureReductionMethod extends Enumeration {

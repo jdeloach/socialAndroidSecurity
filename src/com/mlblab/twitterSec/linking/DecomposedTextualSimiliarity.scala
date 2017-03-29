@@ -29,6 +29,8 @@ import org.apache.spark.mllib.linalg.Vectors
 import org.apache.spark.ml.feature.NGram
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.types.StructType
+import com.mlblab.twitterSec.utils.ClassifierUtils
+import com.mlblab.twitterSec.utils.Utils._
 
 object DecomposedTextualSimiliarity {
   val path = "linkingTextEn.obj"
@@ -54,8 +56,8 @@ object DecomposedTextualSimiliarity {
     
     val methods = Seq(PCA, SVD) // feature reduction methods
     val components = List(0/*, .25*ct, .5*ct, .75*ct*/).map(_.toInt) // number of components to reduce to with feature reduction
-    val ns = Seq(2,3) // n's to experiment with for nGrams
-    val nGramDF = Seq(2,3) // document count min for nGrams
+    val ns = Seq(/*2,*/3) // n's to experiment with for nGrams
+    val nGramDF = Seq(2/*,3*/) // document count min for nGrams
     val NOGramDF = Seq(3,5,7,10,15) // document count min for single terms
     
     ns.foreach { n => {
@@ -99,7 +101,7 @@ object DecomposedTextualSimiliarity {
     // calculate cosine similarity matrices
     val cosineSimilarityMatrix = MathUtils.transposeRowMatrix(docVectorsReduced.toRowMatrix()).columnSimilarities() // upper triangular nxn matrix
     val accum = sc.accumulator(0)
-    
+        
     val ranks = cosineSimilarityMatrix.toIndexedRowMatrix().rows
       .filter(row => docIndexMap(row.index.toInt).endsWith("_t"))
       .map { twitterRow => {
@@ -111,14 +113,15 @@ object DecomposedTextualSimiliarity {
                             .zipWithIndex.filter{ case (value,idx) => docIndexMap(idx).endsWith("_m") } // only rank against other metadata, don't count tweets in ranking
                             .map(_._1).sorted.reverse
         val metaVal = twitterRow.vector.toArray(mCol)
+        val bestMatch = docIndexMap(twitterRow.vector.toArray.toList.indexOf(metaRowRanked.head))
         
-        (metaRowRanked.indexOf(metaVal),metaVal)
+        LinkedResult(metaRowRanked.indexOf(metaVal),metaVal,apk, bestMatch.substring(0, bestMatch.lastIndexOf('_')))
       }}.collect
     
     val total = apks.count - accum.value
 
-    val perfect = ranks.count(x => x._1 == 0)
-    val correctAtLevels = List(.01, .03, .05, .1, .15, .2, .3).map { threshold => threshold -> ranks.filter(x => x._1 <= threshold*total).size }
+    val perfect = ranks.count(x => x.rank == 0)
+    val correctAtLevels = List(.01, .03, .05, .1, .15, .2, .3).map { threshold => threshold -> ranks.filter(x => x.rank <= threshold*total).size }
     
     log.warn(s"dims of docVectorsReduced: ${docVectorsReduced.numRows}x${docVectorsReduced.numCols}, $boilerplateInfo")
     log.warn(s"dims of similarity matrix: ${cosineSimilarityMatrix.numRows}x${cosineSimilarityMatrix.numCols}, $boilerplateInfo")
@@ -126,17 +129,18 @@ object DecomposedTextualSimiliarity {
     log.warn(s"total missing: ${accum.value}, $boilerplateInfo")
     
     ////// THINGS
-    val (perfConf,nonPerfConf,confAvg) = (MathUtils.mean(ranks.filter(_._1 == 0).map(_._2)), MathUtils.mean(ranks.filter(_._1 != 0).map(_._2)), MathUtils.mean(ranks.map(_._2)))
-    val confStdDev = MathUtils.stddev(ranks.map(_._2), confAvg)
+    val (perfConf,nonPerfConf,confAvg) = (MathUtils.mean(ranks.filter(_.rank == 0).map(_.confidence)), MathUtils.mean(ranks.filter(_.rank != 0).map(_.confidence)), MathUtils.mean(ranks.map(_.confidence)))
+    val confStdDev = MathUtils.stddev(ranks.map(_.confidence), confAvg)
     log.warn(s"average confidence when right: $perfConf, when wrong: $nonPerfConf, overall confidence average: $confAvg, confidence std dev: $confStdDev")
     
-    val metrics = MathUtils.rankedMetrics(sc.parallelize(ranks))
+    val metrics = ClassifierUtils.rankedMetrics(sc.parallelize(ranks.map(x => (x.rank,x.confidence))))
     log.warn(s"auPRC: ${metrics.areaUnderPR}, $boilerplateInfo")
-    //log.warn(s"precision: ${metrics.precisionByThreshold.collect.mkString(", ")}, $boilerplateInfo")
-    //log.warn(s"recall: ${metrics.recallByThreshold.collect.mkString(", ")}, $boilerplateInfo")
+    log.warn(s"precision: ${metrics.pr.collect.mkString(", ")}, $boilerplateInfo")
     /////// END THINGS
     
     log.warn(s"for a perfect match, $perfect were recalled, making acc_0: ${perfect/total.toDouble}, $boilerplateInfo")
+    // how to reconstruct going forward ... the tweets of actualApk matched with the metadata of estimatedApk
+    sc.parallelize(ranks, 1).saveAsObjectFile("results.obj")
     correctAtLevels.foreach{ case (threshold,correct) => log.warn(s"at threshold: $threshold, $correct were recalled, making acc_$threshold: ${correct/total.toDouble}, $boilerplateInfo") }
   }
   
