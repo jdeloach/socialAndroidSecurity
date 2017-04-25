@@ -21,6 +21,16 @@ import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.rdd.RDD
 
 object MathUtils {
+  /**
+   * Four times more efficient than using columnSimilarities instead of comparing n documents, for O(n^2), we compared n/2 documents, for O((n/2)^2)
+   * Returns each key from C1, matched with the closest key from C2, with the cosine similarity
+   */
+  def cosineSimilarityBetweenTwoCorpi(c1: RDD[(Int,Vector)], c2: RDD[(Int,Vector)]) : RDD[(Int,Iterable[(Int,Double)])] = {
+    c1.cartesian(c2)
+      .map { case (v1,v2) => v1._1 -> (v2._1,1 - breeze.linalg.functions.cosineDistance(toBreeze(v1._2), toBreeze(v2._2))) }
+      .groupByKey
+  }
+  
   def transposeRowMatrix(m: RowMatrix): RowMatrix = {
     val transposedRowsRDD = m.rows.zipWithIndex.map{case (row, rowIndex) => rowToTransposedTriplet(row, rowIndex)}
       .flatMap(x => x) // now we have triplets (newRowIndex, (newColIndex, value))
@@ -42,7 +52,8 @@ object MathUtils {
   def buildIndexedRow(index: Long, rowWithIndexes: Iterable[(Long, Double)]): IndexedRow = {
     val resArr = new Array[Double](rowWithIndexes.size)
     rowWithIndexes.foreach{case (index, value) =>
-        resArr(index.toInt) = value
+        if(index.toInt < resArr.size)
+          resArr(index.toInt) = value
     }
     IndexedRow(index, Vectors.dense(resArr))
   }
@@ -150,4 +161,9 @@ object MathUtils {
 object FeatureReductionMethod extends Enumeration {
   type FeatureReductionMethod = Value
   val SVD, PCA = Value
+}
+
+object VectorizerForm extends Enumeration {
+  type VectorizerForm = Value
+  val BINARY, COUNT, TFIDF = Value
 }

@@ -17,47 +17,67 @@ import org.apache.spark.sql.SQLContext
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.types.DataTypes
-import com.mlblab.twitterSec.DBUtils
 import breeze.stats.median
 import org.apache.spark.mllib.linalg.DenseMatrix
 import org.apache.spark.mllib.feature.Normalizer
+import com.mlblab.twitterSec.utils.Utils
+import com.mlblab.twitterSec.DBUtils
+import com.mlblab.twitterSec.utils.FeaturePrepUtils
+import org.apache.log4j.LogManager
 
 object FeatureVectorizer {
+  val log = Utils.getLogger
+  
+  /**
+   * @param vectorReducerMethod options: {median, head, sum}
+   */
+  case class FeatureVectorizerProperties(useText: Boolean, n: Int, minDF: Int, vectorReducerMethod: String)
+  
   var properties:HashMap[String,Boolean] = HashMap("useAuthorMetrics" -> true, "useEntityMetrics" -> true, "useConversationStatus" -> true, "useText" -> true)
-  var reducer = "median" // median, head, sum
   var df:DataFrame = _
   
-  def createVectors(sql: SQLContext, red: String, pcaCount: Int) : RDD[(String,SparseVector)] = {
-    reducer = red
-    df = sql.read.json("data/linkedDec20.json").sample(false, 0.1)
+  def createVectors(sql: SQLContext, properties: FeatureVectorizerProperties) : RDD[(Utils.LinkedResult,SparseVector)] = {
+    /*df = sql.read.json("data/linkedDec20.json")//.sample(false, 0.1)
     val df2 = df.select(df("id"), explode(df("urlEntities.expandedURL")))
     val df3 = df2.where((df2("col")).like("%play.google%"))
     val df4 = df.where(df("id").isin(df3.select(df3("id")).map(_.getLong(0)).collect:_*)).repartition(1000).cache
-    
+    df4.write.json("df4.json")
+    */
+    val df = sql.read.json("data/metrics_raw.json")
+
     val base = Seq(df("urlEntities"))
-    val authorMetrics = Seq(df("user.followersCount"), df("user.friendsCount"), df("user.favouritesCount"), df("user.statusesCount"))
-    val entityMetrics = Seq(size(df("mediaEntities")), size(df("urlEntities")))
-    val conversationMetrics = Seq(df("inReplyToUserId") > -1)
-    val text = Seq(df("text"))
+    val authorMetrics = Seq(df("followersCount"), df("friendsCount"), df("favouritesCount"), df("statusesCount"))
+    val entityMetrics = Seq(df("size(mediaEntities)"), df("size(urlEntities)"))
+    val conversationMetrics = Seq(df("(inReplyToUserId > -1)"))
+    //val text = Seq(df("text"))
     
     // metrics element
-    val metrics = df4.select((base ++ authorMetrics ++ entityMetrics ++ conversationMetrics):_*)
+    val metrics = df.select((base ++ authorMetrics ++ entityMetrics ++ conversationMetrics):_*)
       .map(row => appIdFromStatus(row) -> createVector(row))
       .groupByKey
-      .map(x => x._1 -> reducer(x._2))
+      .map(x => x._1 -> reducer(properties.vectorReducerMethod, x._2))
     
-    if(properties("useText") && pcaCount != 0) {
+    if(properties.useText) {
       // text part
-      val textualData = df4.select(df("urlEntities"),df("text")).map(row => appIdFromStatus(row) -> row.getString(row.schema.fieldIndex("text"))).cache
-      val terms = createTerms(sql, textualData)
-      val transformedTerms = transformTerms(terms, pcaCount).repartition(500)
+      //val textualData = df4.select(df("urlEntities"),df("text")).map(row => appIdFromStatus(row) -> row.getString(row.schema.fieldIndex("text"))).cache
+      val dataBase = "/Users/jdeloach/Dropbox/Research/MLB Lab/Linking Tweets And Apps/Data/"
+      val (textualData,linkedResults) = Utils.reconstructDataFromLinkedResult(sql.sparkContext, dataBase + "Linked Tweets Results/results.obj", dataBase + "Linked Tweets/linkingText.obj", .10)
+      log.warn(s"textualData:size: ${textualData.count}")
+      val terms = FeaturePrepUtils.createTerms(sql, textualData, properties.n, properties.minDF)
+      //val transformedTerms = transformTerms(terms, pcaCount).repartition(500)
       
+      //terms.mapValues(_.toSparse)
       // merge feature vectors
-      transformedTerms/*.join(metrics).map{ case (key,vectors) => key -> combine(vectors._1,vectors._2) }*/
+      
+      // we need to use a MislabeledLabeledPoint hurrrrrr
+      val nMetrics = linkedResults.map(res => res.actualApk -> res).join(metrics).map(x => x._2._1 -> x._2._2)
+      val termsWithResultKey = linkedResults.map(res => res.actualApk -> res).join(terms).map(x => x._2._1 -> x._2._2.toSparse)
+      log.warn(s"num terms: ${terms.count}, num metrics: ${metrics.count}, overlap: ${terms.join(metrics).count} nMetricsOverlap: ${termsWithResultKey.join(nMetrics).count}")
+      nMetrics//.join(terms).map{ case (key,vectors) => key -> combine(vectors._2.toSparse,vectors._1) }
     }
     else
     {
-      metrics
+      null//metrics
     }
   }
   
@@ -69,7 +89,7 @@ object FeatureVectorizer {
     }).toArray).toSparse
   }
   
-  def reducer(list: Iterable[SparseVector]) : SparseVector = {
+  def reducer(reducer: String, list: Iterable[SparseVector]) : SparseVector = {
     val merged = reducer match {
       case "head" => list.head
       case "average" => Vectors.dense(list.map(y => breeze.linalg.Vector(y.toArray)).reduce(_ + _).map(z => z / list.size).toArray).toSparse
@@ -94,58 +114,5 @@ object FeatureVectorizer {
     val indices = v1.indices ++ v2.indices.map(e => e + maxIndex)
     val values = v1.values ++ v2.values
     new SparseVector(size, indices, values)
-  }
-
-  def createTerms(sqlContext: SQLContext, texts: RDD[(String,String)]) : RDD[(String,Vector)] = {
-    val df = sqlContext.createDataFrame(texts).toDF("appID", "tweetText")
-    val linkedTweetsSeperated = new Tokenizer().setInputCol("tweetText").setOutputCol("words").transform(df)
-    val linkedTweetsCleaned = (new StopWordsRemover()).setInputCol("words").setOutputCol("filtered").transform(linkedTweetsSeperated)
-    import org.apache.spark.sql.functions._
-    val dropLinks = udf[Seq[String],Seq[String]] (_.filter(!_.startsWith("http")))
-    val linkedTweetsCleanedHtttp = linkedTweetsCleaned.withColumn("filteredMod", dropLinks(col("filtered")))
-
-    val cvModel = new CountVectorizer().setInputCol("filteredMod").setOutputCol("features").fit(linkedTweetsCleanedHtttp)
-    cvModel.transform(linkedTweetsCleanedHtttp).select("appID", "features").rdd.map(x => (x.getString(0), x.getAs[Vector]("features")))
-  }
-  
-  def transformTerms(data: RDD[(String,Vector)], components: Int) : RDD[(String,SparseVector)] = {
-    val mat = new RowMatrix(data.map(_._2)) // consider transposing this ... rows might need to be vocab
-    
-    def transposeRowMatrix(m: RowMatrix): RowMatrix = {
-      val transposedRowsRDD = m.rows.zipWithIndex.map{case (row, rowIndex) => rowToTransposedTriplet(row, rowIndex)}
-        .flatMap(x => x) // now we have triplets (newRowIndex, (newColIndex, value))
-        .groupByKey
-        .sortByKey().map(_._2) // sort rows and remove row indexes
-        .map(buildRow) // restore order of elements in each row and remove column indexes
-      new RowMatrix(transposedRowsRDD)
-    }
-  
-  
-    def rowToTransposedTriplet(row: Vector, rowIndex: Long): Array[(Long, (Long, Double))] = {
-      val indexedRow = row.toArray.zipWithIndex
-      indexedRow.map{case (value, colIndex) => (colIndex.toLong, (rowIndex, value))}
-    }
-  
-    def buildRow(rowWithIndexes: Iterable[(Long, Double)]): Vector = {
-      val resArr = new Array[Double](rowWithIndexes.size)
-      rowWithIndexes.foreach{case (index, value) =>
-          resArr(index.toInt) = value
-      }
-      Vectors.dense(resArr)
-    } 
-    
-    val svd = transposeRowMatrix(mat).computeSVD(components, computeU = true)
-    val reducedSpace = svd.U.multiply(new DenseMatrix(1, svd.s.size, svd.s.toArray)).rows
-    
-    val projection = data.map(_._1).zip(reducedSpace).map(x => x._1 -> x._2.toSparse)
-    
-    val colMins = projection.flatMap(x => List.fromArray(x._2.toArray).zipWithIndex.map(y => y._2 -> y._1))
-            .groupBy(_._1)
-            .map(x => x._1 -> { val min = x._2.map(_._2).min; if (min < 0) Math.abs(min) else 0 })
-            .collectAsMap
-    
-    val updated = projection.mapValues { x => Vectors.dense(x.toArray.toList.zipWithIndex.map{ case (value,idx) => value + colMins(idx) }.toArray).toSparse }
-            
-    updated
   }
 }

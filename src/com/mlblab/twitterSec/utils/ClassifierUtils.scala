@@ -15,7 +15,10 @@ object ClassifierUtils {
     val naiveBayesPRC = folds.map{ case (train,test) => {
       
       val model = NaiveBayes.train(train)
-      val predsAndLabel = test.map{ x=> (model.predict(x.features), x.label) }
+      val predsAndLabel = test.map { 
+        case x: MislabeledLabeledPoint => (model.predict(x.features), x.realLabel)
+        case x: LabeledPoint => (model.predict(x.features), x.label) 
+      }
       (new BinaryClassificationMetrics(predsAndLabel, 100).areaUnderPR)
     }}
     
@@ -26,7 +29,10 @@ object ClassifierUtils {
     val naiveBayesPRC = folds.map{ case (train,test) => {
       
       val model = SVMWithSGD.train(train, 100)
-      val predsAndLabel = test.map{ x=> (model.predict(x.features), x.label) }
+      val predsAndLabel = test.map { 
+        case x: MislabeledLabeledPoint => (model.predict(x.features), x.realLabel)
+        case x: LabeledPoint => (model.predict(x.features), x.label) 
+      }      
       (new BinaryClassificationMetrics(predsAndLabel, 100).areaUnderPR)
     }}
     
@@ -37,7 +43,10 @@ object ClassifierUtils {
     val naiveBayesPRC = folds.map{ case (train,test) => {
       
       val model = new LogisticRegressionWithLBFGS().run(train)
-      val predsAndLabel = test.map{ x=> (model.predict(x.features), x.label) }
+      val predsAndLabel = test.map { 
+        case x: MislabeledLabeledPoint => (model.predict(x.features), x.realLabel)
+        case x: LabeledPoint => (model.predict(x.features), x.label) 
+      }
       (new BinaryClassificationMetrics(predsAndLabel, 100).areaUnderPR)
     }}
     

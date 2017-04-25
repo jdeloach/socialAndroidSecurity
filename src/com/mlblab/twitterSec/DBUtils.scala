@@ -10,6 +10,9 @@ import twitter4j.TwitterObjectFactory
 import org.apache.commons.io.FilenameUtils
 import scala.reflect.runtime.Settings
 import com.mlblab.twitterSec.utils.ConfigValues
+import com.mlblab.twitterSec.utils.Utils
+import com.mlblab.twitterSec.utils.Utils._
+import com.mlblab.twitterSec.utils.MislabeledLabeledPoint
 
 object DBUtils {
   val mysqlURL = ConfigValues.MysqlURL
@@ -76,7 +79,7 @@ object DBUtils {
   }
   
   def loadSelectData2(sc: SparkContext, appIds: Seq[String]) : RDD[(String,LabeledPoint)] = {
-    val md5DB = sc.textFile("data/appIdsAndMd5sAndroZooTwitter.csv")
+    val md5DB = sc.textFile("data/appIdsAndMd5sAptoide.csv") // appIdsAndMd5sAndroZooTwitter.csv
                       .map{x => val a = x.split(","); (a(0),a(1))}
                       .collectAsMap
     val appIdDB = md5DB.map(x => x._2 -> x._1).toMap
@@ -89,7 +92,7 @@ object DBUtils {
       Map("url" -> mysqlURL,
       "dbtable" -> "appSec")).load()
       
-    appSecDF.where(appSecDF("md5").isin(md5s:_*)).filter("scannersCount != -1").map { row => {
+    val t = appSecDF.where(appSecDF("md5").isin(md5s:_*)).filter("scannersCount != -1").map { row => {
       val label = row.getInt(row.fieldIndex("scannersCount")) match {
         case x if x >= 5 => 1d
         case x if x == 0 => 0d
@@ -99,7 +102,12 @@ object DBUtils {
       val features = Vectors.dense(row.toSeq.drop(4).map { _.asInstanceOf[Integer].toDouble }.toArray)
       val appID = appIdDB(row.getString(row.fieldIndex("md5")))
       ((appID),new LabeledPoint(label,features))
-    }}.filter { x => x._2.label != -1 }  
+    }}.cache
+                      
+    Utils.getLogger.warn(s"appIds.count: ${appIds.size}, md5s.count: ${md5s.size}, pos: ${t.filter(_._2.label == 1).count}, neg: ${t.filter(_._2.label == 0).count}, invalid: ${t.filter(_._2.label == -1).count}")
+    val missingAppIds = appIds.toSet -- t.keys.collect.toSet
+    Utils.getLogger.warn(s"missingAppIds.size: ${missingAppIds.size}, list: ${missingAppIds.mkString(",")}")
+    t.filter { x => x._2.label != -1 }  
   }
   
   def load2016LabelsSimple(sc: SparkContext) : RDD[(String,LabeledPoint)] = {
@@ -112,7 +120,7 @@ object DBUtils {
     
     jdbcDF.filter("scannersCount != -1").map { row => {
       val label = row.getInt(row.fieldIndex("scannersCount")) match {
-        case x if x >= 3 => 1d
+        case x if x >= 5 => 1d
         case x if x == 0 => 0d
         case _ => -1d
       }
