@@ -1,6 +1,6 @@
 # Social Android Security
 ## Why
-This project is a two-in-one: my [senior project](https://www.cs.ksu.edu/courses/seniorprojects) for my Computer Science degree, and also my [Nathan Award](https://www.engg.ksu.edu/ergp/undergrad_research/nathan_award/)-funded research in the [Machine Learning and Bioinformatics Lab](http://caragea-wiki.cs.ksu.edu/doku.php) at K-State. The research is advised by Prof. [Doina Caragea](http://people.cs.ksu.edu/~dcaragea/).
+This project is a two-in-one: my [senior project](https://www.cs.ksu.edu/courses/seniorprojects) for my Computer Science degree, and also my [Nathan Award](https://www.engg.ksu.edu/ergp/undergrad_research/nathan_award/)-funded research in the [Machine Learning and Data Science Lab](http://caragea-wiki.cs.ksu.edu/doku.php) at K-State. The research is advised by Prof. [Doina Caragea](http://people.cs.ksu.edu/~dcaragea/).
 
 See predecessor research works on my [academic homepage](http://people.cs.ksu.edu/~jdeloach). Learn more about me on my [personal webpage](http://jordandeloach.com).
 
@@ -39,3 +39,19 @@ Necessary due to Senior Project requirements.
 | 03/06/17 | 4.00 |  |
 | 03/07/17 | 3.50 |  |
 | 03/08/17 | 0.50 |  |
+
+| 03/23/17 | 5 |  |
+| 03/24/17 | 4 |  |
+| 03/27/17 | 1 |  |
+| 03/28/17 | 1 |  |
+| 03/29/17 | 2 |  |
+| 04/02/17 | 3.50 |  |
+| 04/03/17 | 6 |  |
+| 04/04/17 | 6 |  |
+| 04/09/17 | 6.50 |  |
+| 04/10/17 | 4.50 |  |
+| 04/11/17 | 5 |  |
+| 04/13/17 | 2 |  |
+| 04/15/17 | 1 |  |
+| 04/16/17 | 9.50 |  |
+| 04/17/17 | 3.75 |  |
