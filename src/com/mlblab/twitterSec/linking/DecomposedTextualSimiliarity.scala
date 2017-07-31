@@ -63,29 +63,33 @@ object DecomposedTextualSimiliarity {
     val ct = apks.count.toInt
     
     val methods = Seq(PCA, SVD) // feature reduction methods
-    val components = List(0/*, .25*ct, .5*ct, .75*ct*/).map(_.toInt) // number of components to reduce to with feature reduction
+    val components = List(0, .25*ct, .5*ct, .75*ct).map(_.toInt) // number of components to reduce to with feature reduction
     val ns = Seq(/*1,2,*/3) // n's to experiment with for nGrams --3 best
     val nGramDF = Seq(2/*,3*/) // document count min for nGrams
     val NOGramDF = Seq(3,5,7/*,10,15*/) // document count min for single terms
     val w_ms = Seq(0/*, 0.01, 0.1*/) // min weight in document matrix for a term, per WeiWei WTFM paper
-    val vecTypes = Seq(COUNT, BINARY, TFIDF)
-    val stems = Seq(true, false)
-    val ranks = List(/*20, 50,*/ 100, 200, 400, 600)
-    val iterations = List(5, 10/*, 20, 30*/)
-    val alphas = List(/*0.1, 0.5, 1, 2, 3,*/ 5, 20, 50, 100)
+    val vecTypes = Seq(/*COUNT, BINARY,*/ TFIDF)
+    val stems = Seq(/*true,*/ false)
+    val ranks = List(/*20, 50, 100,*/ 200/*, 400, 600*/)
+    val iterations = List(5/*, 10, 20, 30*/)
+    val alphas = List(/*0.1, 0.5, 1, 2, 3, 5, 20, 50, 100,*/ 200, 300, 400)
     
     ns.foreach { n => {
       val dfMins = n match {
         case 1 => NOGramDF
         case _ => nGramDF
       }
-      for(dfMin <- dfMins; rank <- ranks; iteration <- iterations; alpha <- alphas) wtmf(rank, iteration, n, dfMin, alpha)    
-      //for(component <- components; /*method <- methods;*/ dfMin <- dfMins; w_m <- w_ms; vecType <- vecTypes; stem <- stems) iterate(component, /*method*/SVD, n, dfMin, w_m, vecType, stem)
+      //for(dfMin <- dfMins; rank <- ranks; iteration <- iterations; alpha <- alphas) evaluateResults(wtmf(rank, iteration, n, dfMin, alpha))
+      for(component <- components; method <- methods; dfMin <- dfMins; w_m <- w_ms; vecType <- vecTypes; stem <- stems) iterate(component, method, n, dfMin, w_m, vecType, stem)
     }}    
   }
-  
   def wtmf(rank: Int, iterations: Int, n: Int, dfMin: Int, alpha: Double, stem: Boolean = false) = {
     val docVectors = FeaturePrepUtils.createTerms(sql, data.flatMap(x => Seq(x._1 + "_t" -> x._2._1, x._1 + "_m" -> x._2._2)), n, dfMin, TFIDF, stem).zipWithIndex()
+    val results = wtmfInternal(docVectors, rank, iterations, n, dfMin, alpha, stem)
+    evaluateResults(results._1, results._2)
+  }  
+  
+  def wtmfInternal(docVectors: RDD[((String,Vector),Long)], rank: Int, iterations: Int, n: Int, dfMin: Int, alpha: Double, stem: Boolean = false) : (Array[LinkedResult], String) = {
     val docIndexDb = docVectors.map { case ((key,vector),docIndex) => docIndex -> key }.collectAsMap
     val docKeyDb = docVectors.map { case ((key,vector),docIndex) => key.substring(0,key.lastIndexOf('_')) -> docIndex }.groupByKey.collectAsMap
     val boilerplateInfo = s"WTMF, iterations: $iterations, rank: $rank, alpha: $alpha, nGram: $n, docFrequencyMin:$dfMin, stemmed: $stem"
@@ -115,8 +119,8 @@ object DecomposedTextualSimiliarity {
                   
         LinkedResult(metaRowRanked.indexOf(metaVal), metaRowRanked.head/*metaVal*/, apk, bestMatch.substring(0, bestMatch.lastIndexOf('_')))
       }}.collect
-            
-      evaluateResults(ranks, boilerplateInfo)
+      
+      (ranks,boilerplateInfo)
   }
   
   def iterate(components: Int, reducer: FeatureReductionMethod, n: Int, dfMin: Int, w_m: Double, vectorizer: VectorizerForm = COUNT, stem: Boolean = false) = {
@@ -131,7 +135,7 @@ object DecomposedTextualSimiliarity {
     val docVectorsIndex = docVectors.zipWithIndex.map(x => x._1._1 -> x._2.toInt).collectAsMap // apk_{t,m} -> column
     val docIndexMap = docVectors.zipWithIndex.map(x => x._2.toInt -> x._1._1).collectAsMap // column -> apk_{t,m}
     var docVectorsReduced = new IndexedRowMatrix(docVectors.map(x => new IndexedRow(docVectorsIndex(x._1),x._2)))
-    val boilerplateInfo = s"reducer: $reducer, components: $components, nGram: $n, docFrequencyMin:$dfMin, W_m: $w_m, vectorizerForm: $vectorizer, stemmed: $stem"
+    val boilerplateInfo = s"SimpleCosine reducer: $reducer, components: $components, nGram: $n, docFrequencyMin:$dfMin, W_m: $w_m, vectorizerForm: $vectorizer, stemmed: $stem"
     
     if(components != 0) {
       // create reduced space
@@ -164,7 +168,7 @@ object DecomposedTextualSimiliarity {
         val metaVal = twitterRow.vector.toArray(mCol)
         val bestMatch = docIndexMap(twitterRow.vector.toArray.toList.indexOf(metaRowRanked.head))
         
-        LinkedResult(metaRowRanked.indexOf(metaVal),metaVal,apk, bestMatch.substring(0, bestMatch.lastIndexOf('_')))
+        LinkedResult(metaRowRanked.indexOf(metaVal),metaRowRanked.head,apk, bestMatch.substring(0, bestMatch.lastIndexOf('_')))
       }}.collect
     
     log.warn(s"dims of docVectorsReduced: ${docVectorsReduced.numRows}x${docVectorsReduced.numCols}, $boilerplateInfo")
@@ -173,22 +177,18 @@ object DecomposedTextualSimiliarity {
     evaluateResults(ranks, boilerplateInfo)
   }
   
-  def evaluateResults(ranks: Array[LinkedResult], boilerplateInfo: String) = {
-    val total = apks.count
+  def evaluateResults(ranks: Array[LinkedResult], boilerplateInfo: String, sc: SparkContext = sc) = {
+    val total = ranks.length
     val perfect = ranks.count(x => x.rank == 0)
     val correctAtLevels = List(.01, .03, .05, .1, .15, .2, .3).map { threshold => threshold -> ranks.filter(x => x.rank <= threshold*total).size }
         
     val (perfConf,nonPerfConf,confAvg) = (MathUtils.mean(ranks.filter(_.rank == 0).map(_.confidence)), MathUtils.mean(ranks.filter(_.rank != 0).map(_.confidence)), MathUtils.mean(ranks.map(_.confidence)))
     val confStdDev = MathUtils.stddev(ranks.map(_.confidence), confAvg)
-    log.warn(s"average confidence when right: $perfConf, when wrong: $nonPerfConf, overall confidence average: $confAvg, confidence std dev: $confStdDev")
+    log.warn(s"average confidence when right: $perfConf, when wrong: $nonPerfConf, overall confidence average: $confAvg, confidence std dev: $confStdDev, $boilerplateInfo")
     
     val metrics = ClassifierUtils.rankedMetrics(sc.parallelize(ranks.map(x => (x.rank,x.confidence))))
     log.warn(s"auPRC: ${metrics.areaUnderPR}, $boilerplateInfo")
-    //log.warn(s"precision: ${metrics.pr.collect.mkString(", ")}, $boilerplateInfo")
-    
-    if(metrics.areaUnderPR > .99d) {
-      println(ranks.map(x => s"(${x.rank},${x.confidence})").mkString(","))
-    }
+    //log.warn(s"precision-recall points: ${metrics.pr.collect.mkString(", ")}, $boilerplateInfo")
     
     log.warn(s"for a perfect match, $perfect were recalled, making acc_0: ${perfect/total.toDouble}, $boilerplateInfo")
     //sc.parallelize(ranks, 1).saveAsObjectFile("results.obj")

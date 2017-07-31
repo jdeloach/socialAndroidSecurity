@@ -12,6 +12,8 @@ import scala.collection.mutable.ListBuffer
 
 object SentimentAnalysisUtils {
 
+  var pipeline: StanfordCoreNLP = _
+  
   val nlpProps = {
     val props = new Properties()
     props.setProperty("annotators", "tokenize, ssplit, pos, lemma, parse, sentiment")
@@ -31,7 +33,9 @@ object SentimentAnalysisUtils {
 
   def detectSentiment(message: String): SENTIMENT_TYPE = {
 
-    val pipeline = new StanfordCoreNLP(nlpProps)
+    if(pipeline == null) {
+      pipeline = new StanfordCoreNLP(nlpProps)
+    }
 
     val annotation = pipeline.process(message)
     var sentiments: ListBuffer[Double] = ListBuffer()

@@ -94,7 +94,7 @@ object DBUtils {
       
     val t = appSecDF.where(appSecDF("md5").isin(md5s:_*)).filter("scannersCount != -1").map { row => {
       val label = row.getInt(row.fieldIndex("scannersCount")) match {
-        case x if x >= 5 => 1d
+        case x if x >= 3 => 1d
         case x if x == 0 => 0d
         case _ => -1d
       }
@@ -106,7 +106,7 @@ object DBUtils {
                       
     Utils.getLogger.warn(s"appIds.count: ${appIds.size}, md5s.count: ${md5s.size}, pos: ${t.filter(_._2.label == 1).count}, neg: ${t.filter(_._2.label == 0).count}, invalid: ${t.filter(_._2.label == -1).count}")
     val missingAppIds = appIds.toSet -- t.keys.collect.toSet
-    Utils.getLogger.warn(s"missingAppIds.size: ${missingAppIds.size}, list: ${missingAppIds.mkString(",")}")
+    //Utils.getLogger.warn(s"missingAppIds.size: ${missingAppIds.size}, list: ${missingAppIds.mkString(",")}")
     t.filter { x => x._2.label != -1 }  
   }
   

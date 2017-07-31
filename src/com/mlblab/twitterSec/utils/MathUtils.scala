@@ -19,16 +19,54 @@ import org.apache.spark.sql.types.ArrayType
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.rdd.RDD
+import breeze.linalg.{Vector => BV}
 
 object MathUtils {
   /**
    * Four times more efficient than using columnSimilarities instead of comparing n documents, for O(n^2), we compared n/2 documents, for O((n/2)^2)
    * Returns each key from C1, matched with the closest key from C2, with the cosine similarity
    */
-  def cosineSimilarityBetweenTwoCorpi(c1: RDD[(Int,Vector)], c2: RDD[(Int,Vector)]) : RDD[(Int,Iterable[(Int,Double)])] = {
+  def cosineSimilarityBetweenTwoCorpi(c1: RDD[(String,Vector)], c2: RDD[(String,Vector)]) : RDD[(String,Iterable[(String,Double)])] = {
     c1.cartesian(c2)
       .map { case (v1,v2) => v1._1 -> (v2._1,1 - breeze.linalg.functions.cosineDistance(toBreeze(v1._2), toBreeze(v2._2))) }
       .groupByKey
+  }
+  
+  def internalCosSim2(metadata: RDD[(String,BV[Double])], tweets: RDD[(String,BV[Double])], threshold: Double) : RDD[(String,Seq[(String,Double)])] = {
+    Utils.getLogger.warn(s"metadata.size: ${metadata.count}, tweets.size: ${tweets.count}")
+    val metadataBroad = metadata.context.broadcast(metadata.collect)
+    
+    tweets.mapPartitions { partition => {
+      val metas = metadataBroad.value
+      
+      partition.flatMap {case (tId,tVec) => {
+        val sim = metas.map{ case (mId,mVec) => mId -> (1 - breeze.linalg.functions.cosineDistance(tVec, mVec)) }.sortBy(_._2).reverse.head
+        
+        if(sim._2 > .99d)
+          Utils.getLogger.warn(s"num tVec.terms: ${tVec.activeSize}")
+        
+        if(sim._2 > threshold)
+          Some(sim._1 -> Seq((tId,sim._2)))
+        else
+          None
+      }}}
+    }
+  }
+  
+  /**
+   * Returns (metadata,tweetID,confidence)
+   */
+  def cosineSimilarityBetweenTwoCorpi2(metadata: RDD[(String,BV[Double])], tweets: RDD[(String,BV[Double])], threshold: Double) : RDD[(String,Seq[(String,Double)])] = {
+    internalCosSim2(metadata, tweets, threshold)
+    .reduceByKey { case (a,b) => if(a.head._2 > b.head._2) a else b }
+  }
+  
+  /**
+   * Returns (metadata,List(tweetID,confidence))
+   */
+  def cosineSimilarityBetweenTwoCorpiMulti(metadata: RDD[(String,BV[Double])], tweets: RDD[(String,BV[Double])], threshold: Double) : RDD[(String,Seq[(String,Double)])] = {
+    internalCosSim2(metadata, tweets, threshold)
+    .reduceByKey { case (a,b) => a ++ b }
   }
   
   def transposeRowMatrix(m: RowMatrix): RowMatrix = {

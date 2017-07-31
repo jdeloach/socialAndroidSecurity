@@ -9,15 +9,18 @@ import scala.util.parsing.json.JSON
 
 object InsertIntoDb {
   def main(args: Array[String]) : Unit = {
-    val secResultsPath = "/Users/jdeloach/Documents/ML Data/2016/tableTwitter.txt"
-    //val scanReports = "/Users/jdeloach/Developer/workspaceML/twitterMLProject/keywords/tweeeted_about_but_not_in_db2.txt/scanreports/"
+    val base = "/Users/jdeloach/Developer/workspaceML/twitterMLProject/data/aptoide2017/"
+    val secResultsPath = base + "table aptoide.txt"
+    val scanReportsLoc = base + "/md5scans/"
+    val aptoideMetas = "/Users/jdeloach/data/datas/"
     val androzooPath = "/Users/jdeloach/Documents/ML Data/2016/latest.csv"
     
     val binaryScan = readInTable(secResultsPath) // apk,features
-    val scanResults =  readInAndroZooDB(androzooPath) //readInScanResults(scanReports) // apk,md5,scannersCount
+    //val scanResults =  readInAndroZooDB(androzooPath) //readInScanResults(scanReports) // apk,md5,scannersCount
+    val scanResults = readInScanResults(scanReportsLoc, readInAptoideMetas(aptoideMetas))
     val overlap = binaryScan.keySet & scanResults.keySet
     
-    val statements = overlap.map(key => s"('${scanResults(key)._3}','null',${scanResults(key)._2},'${scanResults(key)._1}',${binaryScan(key).mkString(",")})")
+    val statements = overlap.map(key => s"('$key','null',${scanResults(key)._2},'${scanResults(key)._1}',${binaryScan(key).mkString(",")})")
     //statements.take(500).foreach(println)
     insert(statements.toList)
     println("done")
@@ -36,6 +39,16 @@ object InsertIntoDb {
     }}.toMap
   }
   
+  def readInAptoideMetas(path: String) : Map[String,String] ={
+    (new File(path)).listFiles().flatMap { file => {
+      val data = scala.io.Source.fromFile(file).getLines.mkString
+      val t = JSON.parseFull(data).get.asInstanceOf[Map[String,Any]]
+      val apk = t.get("apk").get.asInstanceOf[Map[String,Any]]
+      
+      Some(apk.get("md5sum").get.asInstanceOf[String],apk.get("package").get.asInstanceOf[String])
+    }}.toMap
+  }
+  
   def readInAndroZooDB(path: String) : Map[String,(String,Int,String)] = {
     scala.io.Source.fromFile(path).getLines.drop(1).map { line => {
       //sha256,sha1,md5,dex_date,apk_size,pkg_name,vercode,vt_detection,vt_scan_date,dex_size,markets
@@ -49,14 +62,22 @@ object InsertIntoDb {
     }}.toMap
   }
   
-  def readInScanResults(path: String) : Map[String,(String,Int)] = {
+  def readInScanResults(path: String, md5ToApkDb: Map[String,String]) : Map[String,(String,Int)] = {
     val scanResults = (new File(path)).listFiles
+    val apiVersion = 1    
 
     scanResults.flatMap(file => {
       try {
         val data = scala.io.Source.fromFile(file).getLines.mkString
         val t = JSON.parseFull(data).get.asInstanceOf[Map[String,Any]]
-        Some(FilenameUtils.getBaseName(file.getName) -> (t.get("resource").get.asInstanceOf[String],t.get("positives").get.asInstanceOf[Double].toInt))
+        
+        val res = apiVersion match {
+          case 1 => Some(md5ToApkDb(FilenameUtils.getBaseName(file.getName)) -> (FilenameUtils.getBaseName(file.getName), t.get("report").get.asInstanceOf[List[Any]].tail.head.asInstanceOf[Map[String,String]].values.count(_ != "")))
+          case 2 => Some(FilenameUtils.getBaseName(file.getName) -> (t.get("resource").get.asInstanceOf[String],t.get("positives").get.asInstanceOf[Double].toInt))
+          case _ => throw new Exception("API VERSION NOT RECOGNIZED")
+        }
+        println(res)
+        res
       } catch {
         case e: Exception => None
       }
@@ -68,6 +89,7 @@ object InsertIntoDb {
       val connection = DriverManager.getConnection(DBUtils.mysqlURL);
       val statement = connection.createStatement
       
+      values.foreach(println)
       // apk,class,scannersCount,md5, ... features
       
       values.grouped(200).foreach { list => {

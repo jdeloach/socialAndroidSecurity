@@ -39,16 +39,16 @@ object TweetAugmentedClassifier {
   
   def main(args: Array[String]) = {
     val conf = new SparkConf().setAppName(this.getClass.getSimpleName)
-          //.setMaster("local[10]")
-          //.set("spark.driver.memory", "16g")
-          //.set("spark.executor.memory", "3g")
+          .setMaster("local[10]")
+          .set("spark.driver.memory", "24g")
+          .set("spark.executor.memory", "16g")
           
     sc = new SparkContext(conf)
     val appender = new FileAppender(new SimpleLayout(),"logs/log_" + System.nanoTime() + ".log", false)
     appender.setThreshold(Priority.WARN)
     log.addAppender(appender)
 
-    var twitterVectors:RDD[(LinkedResult,SparseVector)] = null
+    var twitterVectors:RDD[(String/*LinkedResult*/,SparseVector)] = null
     
     Set(/*"head", "sum", */"average"/*, "median"*/).foreach(reducer => {
       twitterVectors = FeatureVectorizer.createVectors(new SQLContext(sc), FeatureVectorizerProperties(useText = true, n = 3, minDF = 2, vectorReducerMethod = reducer))
@@ -58,10 +58,12 @@ object TweetAugmentedClassifier {
     })
   }
   
-  def run(twitterVectors: RDD[(LinkedResult,SparseVector)], label: String) = {
+  def run(twitterVectors: RDD[(/*LinkedResult*/String,SparseVector)], label: String) = {
     log.warn(s"number of linked tweets in db ${twitterVectors.count}\n")
     
-    val t = constructMislinkedDataset(twitterVectors)
+    val t = twitterVectors.join(DBUtils.loadSelectData2(twitterVectors.context, twitterVectors.keys.collect())).map(x => x._1 -> (x._2._2,x._2._1))
+    //val t = constructMislinkedDataset(twitterVectors)
+    
     
     val noTweets:RDD[LabeledPoint] = t.map(x => (x._2._1))
     val withTweets:RDD[LabeledPoint] = t.map(x => new LabeledPoint(x._2._1.label, combine(x._2._1.features.toSparse, x._2._2)))
@@ -76,14 +78,14 @@ object TweetAugmentedClassifier {
     val nbPRC = (ClassifierUtils.naiveBayes(noTweetsFolds), ClassifierUtils.naiveBayes(withTweetsFolds))
     val svmPRC = (ClassifierUtils.svm(noTweetsFolds), ClassifierUtils.svm(withTweetsFolds))
     val lrPRC = (ClassifierUtils.logisticRegression(noTweetsFolds), ClassifierUtils.logisticRegression(withTweetsFolds))
-    val rfPRC = (ClassifierUtils.randomForrest(noTweetsFolds), ClassifierUtils.randomForrest(withTweetsFolds))
+    //val rfPRC = (ClassifierUtils.randomForrest(noTweetsFolds), ClassifierUtils.randomForrest(withTweetsFolds))
     
     log.warn(s"feature vector size noTweets: ${noTweets.first.features.size}, withTweets: ${withTweets.first.features.size}, label: $label\n")    
     log.warn(s"instance size: ${noTweets.count}, pos: ${noTweets.filter(_.label == 1).count}, neg: ${noTweets.filter(_.label == 0).count}, label: $label\n")
     log.warn(s"NaiveBayes -- noTweets: ${nbPRC._1}, withTweets: ${nbPRC._2}, label: $label\n")
     log.warn(s"SVM -- noTweets: ${svmPRC._1}, withTweets: ${svmPRC._2}, label: $label\n")
     log.warn(s"Logistic Regression -- noTweets: ${lrPRC._1}, withTweets: ${lrPRC._2}, label: $label\n")
-    log.warn(s"Random Forrest -- noTweets: ${rfPRC._1}, withTweets: ${rfPRC._2}\n")
+    //log.warn(s"Random Forrest -- noTweets: ${rfPRC._1}, withTweets: ${rfPRC._2}\n")
   }
   
   /**
@@ -97,13 +99,5 @@ object TweetAugmentedClassifier {
             .map(x => x._1.estimatedApk -> x._2)
             .join(binaryFeatures)
             .map(x => x._1 -> (x._2._2, x._2._1))
-  }
-  
-  def combine(v1:SparseVector, v2:SparseVector): SparseVector = {
-    val size = v1.size + v2.size
-    val maxIndex = v1.size
-    val indices = v1.indices ++ v2.indices.map(e => e + maxIndex)
-    val values = v1.values ++ v2.values
-    new SparseVector(size, indices, values)
   }
 }

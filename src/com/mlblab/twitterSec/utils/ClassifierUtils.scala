@@ -9,6 +9,7 @@ import org.apache.spark.mllib.classification.SVMWithSGD
 import org.apache.spark.mllib.classification.NaiveBayes
 import org.apache.spark.mllib.tree.RandomForest
 import org.apache.spark.mllib.classification.LRLogisticRegressionWithLBFGS
+import org.apache.spark.mllib.linalg.SparseVector
 
 object ClassifierUtils {
   def naiveBayes(folds: Array[(RDD[LabeledPoint],RDD[LabeledPoint])]) : Double = {
@@ -94,6 +95,14 @@ object ClassifierUtils {
     // ranks[(Index, 0=correct,Confidence)]
     val confMax = ranks.map(_._2).max
     val adjusted = ranks.map { case (rank,conf) => val label = rank match { case 0 => 1d case _ => 0d }; val score = conf * (1 / confMax); (score,label) }
-    new BinaryClassificationMetrics(adjusted)
+    new BinaryClassificationMetrics(adjusted, 100)
+  }
+  
+  def combine(v1:SparseVector, v2:SparseVector): SparseVector = {
+    val size = v1.size + v2.size
+    val maxIndex = v1.size
+    val indices = v1.indices ++ v2.indices.map(e => e + maxIndex)
+    val values = v1.values ++ v2.values
+    new SparseVector(size, indices, values)
   }
 }

@@ -58,7 +58,7 @@ object FeaturePrepUtils {
       val ngram = new NGram().setN(n).setInputCol(currOutputField).setOutputCol("filteredModNGram")
       // Quick Fix for local install of 1.6.0, due to SPARK-12746, make output column nullable
       val ngramTransformed = MathUtils.setNullableStateOfArrayColumn(ngram.transform(data), "filteredModNGram", true)
-      val cvModel = new CountVectorizer().setMinDF(dfMin).setInputCol("filteredModNGram").setOutputCol("features").fit(ngramTransformed)
+      val cvModel = new CountVectorizer()/*.setMinDF(dfMin)*/.setVocabSize(10000).setInputCol("filteredModNGram").setOutputCol("features").fit(ngramTransformed)
       currOutputField = "features"
       cvModel.transform(ngramTransformed)
     } else {      

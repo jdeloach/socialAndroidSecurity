@@ -22,26 +22,28 @@ object RunMD5s {
     val sc = new SparkContext(conf)
     val sqlContext = new SQLContext(sc)
     
-    val base = "/Users/jdeloach/Developer/workspaceML/twitterMLProject/data/"
-    val toScan = readMd5List2(base + "appIdsAndMd5sAptoide.csv")
+    val base = "/Users/jdeloach/Developer/workspaceML/twitterMLProject/data/aptoide2017/"
+    val toScan = readMD5List3(base + "md5s.txt")
     
-    val df = sqlContext.read.json(base + "scanreports/*.json")
-    val toSkip = df.select(df("md5")).rdd.map(_.getString(0) -> 1).collectAsMap
+    //val df = sqlContext.read.json(base + "scanreports/*.json")
+    //val toSkip = df.select(df("md5")).rdd.map(_.getString(0) -> 1).collectAsMap
     
     var time = System.nanoTime
     var count = 0
     var total = 0
     
-    toScan.filter(x => !toSkip.contains(x._2)).grouped(25).toList.par.foreach{ iter => {
-      if(seconds(time) < 60 && count >= 19000) {
-        Thread.sleep((seconds(time) * 1000).toLong)
-        time = System.nanoTime
-        count = 0
-      }
-      val filescan = filescanReport(iter.seq.map(_._2).toArray)
-      scala.tools.nsc.io.File(base + "scanreports/" + System.nanoTime + ".json").writeAll(filescan)
-      count = count + 10
-      total = total + 10
+    toScan/*.filter(x => !toSkip.contains(x._2)).grouped(4)*/.toList.foreach{ iter => {
+      //if(seconds(time) < 60 && count >= 4) {
+      //  Thread.sleep((seconds(time) * 1000).toLong)
+      //  time = System.nanoTime
+      //  count = 0
+      //}
+      val filescan = filescanReport(iter._2/*.seq.map(_._2).toArray*/)
+      val saved = base + "md5scans/" + iter._2 + ".json"
+      println("saved to " + saved)
+      scala.tools.nsc.io.File(saved).writeAll(filescan)
+      count = count + 4
+      total = total + 4
       
       if(count % 1000 == 0) {
         println("running at rate: " + (count / seconds(time).toDouble) + ", total: " + total)
@@ -51,6 +53,9 @@ object RunMD5s {
         println("Hit 44500. Shutting down.")
         System.exit(0)
       }
+      
+      println("sleeping for 15 seconds")
+      Thread.sleep(15 * 1000)
     }}
   }
   
@@ -64,18 +69,22 @@ object RunMD5s {
     scala.io.Source.fromFile(path).getLines.map { x => val arr = x.split(" "); (arr(1).substring(1, arr(1).length()-5),arr(arr.length-1)) }.toSeq
   }
   
-  def filescanReport(md5s: Array[String]) : String = {
-    val url = "https://www.virustotal.com/vtapi/v2/file/report"
+  def readMD5List3(path: String) : Seq[(String,String)] = {
+    scala.io.Source.fromFile(path).getLines.map { x => ("",x) }.toSeq
+  }
+  
+  def filescanReport(md5s: /*Array[*/String/*]*/) : String = {
+    val url = "https://www.virustotal.com/api/get_file_report.json" //"https://www.virustotal.com/vtapi/v2/file/report"
     val client = new DefaultHttpClient
     val post = new HttpPost(url)
     val nameValuePairs = new ArrayList[NameValuePair]()
-    nameValuePairs.add(new BasicNameValuePair("resource", md5s.mkString(","))); // can make this a comma seperated list
+    nameValuePairs.add(new BasicNameValuePair("resource", md5s/*.mkString(",")*/)); // can make this a comma seperated list
     nameValuePairs.add(new BasicNameValuePair("apikey", ConfigValues.VirusTotalApiKey));
     post.setEntity(new UrlEncodedFormEntity(nameValuePairs));
     
     // send the post request
     val response = client.execute(post)
-    //response.getAllHeaders.foreach(x => println(x))
+    response.getAllHeaders.foreach(x => println(x))
     scala.io.Source.fromInputStream(response.getEntity.getContent).getLines.mkString
   }
 }
